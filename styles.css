@@ -61,7 +61,8 @@ header p {
 }
 
 input[type="file"],
-input[type="range"] {
+input[type="range"],
+input[type="number"] {
   width: 100%;
 }
 

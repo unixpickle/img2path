@@ -5,8 +5,8 @@
     sourceEmptyMessage: document.getElementById("sourceEmptyMessage"),
     smoothIterations: document.getElementById("smoothIterations"),
     smoothIterationsValue: document.getElementById("smoothIterationsValue"),
-    decimateAngle: document.getElementById("decimateAngle"),
-    decimateAngleValue: document.getElementById("decimateAngleValue"),
+    targetSegments: document.getElementById("targetSegments"),
+    targetSegmentsValue: document.getElementById("targetSegmentsValue"),
     sourceCanvas: document.getElementById("sourceCanvas"),
     binaryCanvas: document.getElementById("binaryCanvas"),
     svgPanel: document.getElementById("svgPanel"),
@@ -27,19 +27,29 @@
     colors: null,
     mask: null,
     svgText: "",
+    resetTargetSegments: true,
+    targetSegmentsMin: 5,
+    targetSegmentsMax: 10000,
   };
+
+  const TARGET_SEGMENTS_DEFAULT = 500;
+  const TARGET_SEGMENTS_MIN_DEFAULT = 5;
+  const TARGET_SEGMENTS_MAX_DEFAULT = 10000;
+  const TARGET_SLIDER_MIN = 0;
+  const TARGET_SLIDER_MAX = 1000;
 
   const sourceCtx = els.sourceCanvas.getContext("2d", { willReadFrequently: true });
   const binaryCtx = els.binaryCanvas.getContext("2d");
 
+  initTargetSegmentsControl();
   initSourceDropzone();
   els.smoothIterations.addEventListener("input", () => {
     els.smoothIterationsValue.textContent = els.smoothIterations.value;
     if (state.colors) processImage();
   });
 
-  els.decimateAngle.addEventListener("input", () => {
-    els.decimateAngleValue.textContent = els.decimateAngle.value;
+  els.targetSegments.addEventListener("input", () => {
+    els.targetSegmentsValue.textContent = String(getTargetSegmentsFromSlider());
     if (state.colors) processImage();
   });
 
@@ -156,6 +166,7 @@
     const img = await loadImage(file);
     drawSource(img);
     ingestSourcePixels();
+    state.resetTargetSegments = true;
     processImage();
     setSourceLoaded(true);
   }
@@ -218,8 +229,13 @@
     drawMask(mask, width, height);
 
     let mesh = traceBoundaryMesh(mask, width, height);
+    const baseLoops = meshToLoops(mesh);
+    const minTargetSegments = baseLoops.length > 0 ? baseLoops.length * 3 : 1;
+    updateTargetSegmentsControl(mesh.segments.length, minTargetSegments, state.resetTargetSegments);
+    state.resetTargetSegments = false;
     mesh = smoothMesh(mesh, Number(els.smoothIterations.value) || 0);
-    mesh = decimateMesh(mesh, Number(els.decimateAngle.value) || 0);
+    const targetSegments = getTargetSegmentsFromSlider();
+    mesh = decimateMeshToTarget(mesh, targetSegments);
     const loops = meshToLoops(mesh);
     const outputSegmentCount = loops.reduce((total, loop) => total + loop.length, 0);
     const path = loopsToPathData(loops, mesh.coords, height);
@@ -473,56 +489,81 @@
     return -polyB / (2 * polyA);
   }
 
-  function decimateMesh(mesh, angleToleranceDeg) {
+  function decimateMeshToTarget(mesh, targetSegments) {
     if (mesh.segments.length === 0) return mesh;
+    if (targetSegments <= 0) return mesh;
+
     const adj = new Array(mesh.coords.length);
     for (let i = 0; i < adj.length; i++) adj[i] = new Set();
+
+    let segmentCount = 0;
     for (const [a, b] of mesh.segments) {
+      if (a === b) continue;
+      if (adj[a].has(b)) continue;
       adj[a].add(b);
       adj[b].add(a);
+      segmentCount++;
     }
+
+    if (targetSegments >= segmentCount) return mesh;
 
     const active = new Array(mesh.coords.length).fill(true);
-    const queue = [];
+    const versions = new Array(mesh.coords.length).fill(0);
+    const heap = new MinHeap((x, y) => x.area2 - y.area2);
+
     for (let i = 0; i < adj.length; i++) {
-      if (adj[i].size === 2) queue.push(i);
+      pushCollapseCandidate(i);
     }
 
-    const tolRad = (angleToleranceDeg * Math.PI) / 180;
-    const maxCos = -Math.cos(tolRad);
+    while (segmentCount > targetSegments && heap.size() > 0) {
+      const item = heap.pop();
+      if (!item) break;
 
-    while (queue.length > 0) {
-      const v = queue.pop();
-      if (!active[v] || adj[v].size !== 2) continue;
+      const v = item.v;
+      if (!active[v] || versions[v] !== item.version) continue;
+      if (adj[v].size !== 2) continue;
+
       const neighbors = Array.from(adj[v]);
       const a = neighbors[0];
       const b = neighbors[1];
       if (!active[a] || !active[b] || a === b) continue;
+      if (adj[a].has(b)) continue;
 
-      const vaX = mesh.coords[a].x - mesh.coords[v].x;
-      const vaY = mesh.coords[a].y - mesh.coords[v].y;
-      const vbX = mesh.coords[b].x - mesh.coords[v].x;
-      const vbY = mesh.coords[b].y - mesh.coords[v].y;
-      const la = Math.hypot(vaX, vaY);
-      const lb = Math.hypot(vbX, vbY);
-      if (la < 1e-9 || lb < 1e-9) continue;
-
-      const cosAngle = (vaX * vbX + vaY * vbY) / (la * lb);
-      if (cosAngle > maxCos) continue;
-
-      adj[a].delete(v);
-      adj[b].delete(v);
+      if (adj[a].delete(v)) segmentCount--;
+      if (adj[b].delete(v)) segmentCount--;
       adj[v].clear();
       active[v] = false;
+      versions[v]++;
 
       adj[a].add(b);
       adj[b].add(a);
-      if (adj[a].size === 2) queue.push(a);
-      if (adj[b].size === 2) queue.push(b);
+      segmentCount++;
+      versions[a]++;
+      versions[b]++;
+
+      pushCollapseCandidate(a);
+      pushCollapseCandidate(b);
     }
 
-    const remapped = compactMesh(mesh.coords, adj, active);
-    return remapped;
+    return compactMesh(mesh.coords, adj, active);
+
+    function pushCollapseCandidate(v) {
+      if (!active[v] || adj[v].size !== 2) return;
+      const neighbors = Array.from(adj[v]);
+      const a = neighbors[0];
+      const b = neighbors[1];
+      if (!active[a] || !active[b] || a === b) return;
+      const area2 = doubledTriangleArea(mesh.coords[a], mesh.coords[v], mesh.coords[b]);
+      heap.push({
+        area2,
+        v,
+        version: versions[v],
+      });
+    }
+  }
+
+  function doubledTriangleArea(a, b, c) {
+    return Math.abs((a.x - b.x) * (c.y - b.y) - (a.y - b.y) * (c.x - b.x));
   }
 
   function compactMesh(coords, adj, active) {
@@ -660,5 +701,124 @@
     const kb = bytes / 1024;
     els.pathSizeValue.textContent = `${kb.toFixed(2)} KB`;
     els.segmentCountValue.textContent = String(segmentCount || 0);
+  }
+
+  function initTargetSegmentsControl() {
+    state.targetSegmentsMin = TARGET_SEGMENTS_MIN_DEFAULT;
+    state.targetSegmentsMax = TARGET_SEGMENTS_MAX_DEFAULT;
+    els.targetSegments.min = String(TARGET_SLIDER_MIN);
+    els.targetSegments.max = String(TARGET_SLIDER_MAX);
+    els.targetSegments.step = "1";
+    els.targetSegments.value = String(segmentsToSliderPosition(TARGET_SEGMENTS_DEFAULT));
+    els.targetSegmentsValue.textContent = String(TARGET_SEGMENTS_DEFAULT);
+  }
+
+  function getTargetSegmentsFromSlider() {
+    const sliderPos = Number(els.targetSegments.value);
+    return sliderPositionToSegments(sliderPos);
+  }
+
+  function sliderPositionToSegments(sliderPos) {
+    const pos = clamp(sliderPos, TARGET_SLIDER_MIN, TARGET_SLIDER_MAX);
+    const min = state.targetSegmentsMin;
+    const max = state.targetSegmentsMax;
+    if (max <= min) return min;
+    const t = (pos - TARGET_SLIDER_MIN) / (TARGET_SLIDER_MAX - TARGET_SLIDER_MIN);
+    const value = Math.exp(Math.log(min) + t * (Math.log(max) - Math.log(min)));
+    return Math.max(min, Math.min(max, Math.round(value)));
+  }
+
+  function segmentsToSliderPosition(segments) {
+    const min = state.targetSegmentsMin;
+    const max = state.targetSegmentsMax;
+    if (max <= min) return TARGET_SLIDER_MIN;
+    const clamped = clamp(segments, min, max);
+    const t = (Math.log(clamped) - Math.log(min)) / (Math.log(max) - Math.log(min));
+    return Math.round(TARGET_SLIDER_MIN + t * (TARGET_SLIDER_MAX - TARGET_SLIDER_MIN));
+  }
+
+  function updateTargetSegmentsControl(maxSegments, minSegments, forceReset) {
+    const max = Math.max(1, Math.floor(maxSegments || 0));
+    const requestedMin = Math.max(1, Math.floor(minSegments || 1));
+    const min = Math.min(requestedMin, max);
+    const maxChanged = state.targetSegmentsMax !== max;
+    const minChanged = state.targetSegmentsMin !== min;
+    const rangeChanged = maxChanged || minChanged;
+
+    state.targetSegmentsMin = min;
+    state.targetSegmentsMax = max;
+
+    let selectedSegments;
+    if (forceReset || rangeChanged) {
+      selectedSegments = Math.min(TARGET_SEGMENTS_DEFAULT, max);
+    } else {
+      selectedSegments = getTargetSegmentsFromSlider();
+    }
+    selectedSegments = clamp(selectedSegments, min, max);
+
+    els.targetSegments.value = String(segmentsToSliderPosition(selectedSegments));
+    els.targetSegmentsValue.textContent = String(selectedSegments);
+  }
+
+  function clamp(v, lo, hi) {
+    return Math.max(lo, Math.min(hi, v));
+  }
+
+  class MinHeap {
+    constructor(compareFn) {
+      this.compareFn = compareFn;
+      this.items = [];
+    }
+
+    size() {
+      return this.items.length;
+    }
+
+    push(value) {
+      this.items.push(value);
+      this.bubbleUp(this.items.length - 1);
+    }
+
+    pop() {
+      if (this.items.length === 0) return null;
+      if (this.items.length === 1) return this.items.pop();
+      const min = this.items[0];
+      this.items[0] = this.items.pop();
+      this.bubbleDown(0);
+      return min;
+    }
+
+    bubbleUp(index) {
+      while (index > 0) {
+        const parent = Math.floor((index - 1) / 2);
+        if (this.compareFn(this.items[index], this.items[parent]) >= 0) break;
+        this.swap(index, parent);
+        index = parent;
+      }
+    }
+
+    bubbleDown(index) {
+      for (;;) {
+        const left = index * 2 + 1;
+        const right = left + 1;
+        let smallest = index;
+
+        if (left < this.items.length && this.compareFn(this.items[left], this.items[smallest]) < 0) {
+          smallest = left;
+        }
+        if (right < this.items.length && this.compareFn(this.items[right], this.items[smallest]) < 0) {
+          smallest = right;
+        }
+        if (smallest === index) return;
+        this.swap(index, smallest);
+        index = smallest;
+      }
+    }
+
+    swap(i, j) {
+      const temp = this.items[i];
+      this.items[i] = this.items[j];
+      this.items[j] = temp;
+    }
   }
 })();
