@@ -63,9 +63,19 @@
       <section>
         <h2>Path Data</h2>
         <div class="path-tools">
-          <div class="path-stats">
-            <span>Size: <strong id="pathSizeValue">0.00 KB</strong></span>
-            <span>Segments: <strong id="segmentCountValue">0</strong></span>
+          <div class="path-tools-left">
+            <div class="tabbar path-format-tabs" role="tablist" aria-label="Text output format">
+              <button id="textFormatSvg" class="tab-btn active" type="button" role="tab" aria-selected="true">
+                SVG Path
+              </button>
+              <button id="textFormatScad" class="tab-btn" type="button" role="tab" aria-selected="false">
+                OpenSCAD
+              </button>
+            </div>
+            <div class="path-stats">
+              <span>Size: <strong id="pathSizeValue">0.00 KB</strong></span>
+              <span>Segments: <strong id="segmentCountValue">0</strong></span>
+            </div>
           </div>
           <button id="copyPathBtn" type="button" disabled>Copy Path</button>
         </div>

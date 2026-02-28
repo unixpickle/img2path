@@ -243,6 +243,17 @@ canvas {
   flex-wrap: wrap;
 }
 
+.path-tools-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.path-format-tabs {
+  margin-bottom: 0;
+}
+
 .path-stats {
   display: flex;
   gap: 16px;

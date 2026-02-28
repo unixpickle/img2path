@@ -13,6 +13,8 @@
     binaryPanel: document.getElementById("binaryPanel"),
     outputTabSvg: document.getElementById("outputTabSvg"),
     outputTabBinary: document.getElementById("outputTabBinary"),
+    textFormatSvg: document.getElementById("textFormatSvg"),
+    textFormatScad: document.getElementById("textFormatScad"),
     svgContainer: document.getElementById("svgContainer"),
     pathData: document.getElementById("pathData"),
     pathSizeValue: document.getElementById("pathSizeValue"),
@@ -27,6 +29,10 @@
     colors: null,
     mask: null,
     svgText: "",
+    svgPathText: "",
+    scadText: "",
+    textFormat: "svg",
+    outputSegmentCount: 0,
     resetTargetSegments: true,
     targetSegmentsMin: 5,
     targetSegmentsMax: 10000,
@@ -104,9 +110,12 @@
 
   els.outputTabSvg.addEventListener("click", () => setOutputTab("svg"));
   els.outputTabBinary.addEventListener("click", () => setOutputTab("binary"));
+  els.textFormatSvg.addEventListener("click", () => setTextFormat("svg"));
+  els.textFormatScad.addEventListener("click", () => setTextFormat("scad"));
   setOutputTab("svg");
+  setTextFormat("svg");
   setSourceLoaded(false);
-  updatePathStats("", 0);
+  renderTextOutput();
 
   function initSourceDropzone() {
     const dropzone = els.sourceDropzone;
@@ -192,6 +201,16 @@
     els.outputTabBinary.setAttribute("aria-selected", svgActive ? "false" : "true");
   }
 
+  function setTextFormat(format) {
+    const svgActive = format === "svg";
+    state.textFormat = svgActive ? "svg" : "scad";
+    els.textFormatSvg.classList.toggle("active", svgActive);
+    els.textFormatScad.classList.toggle("active", !svgActive);
+    els.textFormatSvg.setAttribute("aria-selected", svgActive ? "true" : "false");
+    els.textFormatScad.setAttribute("aria-selected", svgActive ? "false" : "true");
+    renderTextOutput();
+  }
+
   function drawSource(img) {
     state.width = img.naturalWidth || img.width;
     state.height = img.naturalHeight || img.height;
@@ -239,13 +258,15 @@
     const loops = meshToLoops(mesh);
     const outputSegmentCount = loops.reduce((total, loop) => total + loop.length, 0);
     const path = loopsToPathData(loops, mesh.coords, height);
+    const scad = loopsToOpenScad(loops, mesh.coords);
     const svg = pathToSvg(path, width, height);
 
     state.svgText = svg;
+    state.svgPathText = path;
+    state.scadText = scad;
+    state.outputSegmentCount = outputSegmentCount;
     els.svgContainer.innerHTML = svg;
-    els.pathData.value = path;
-    updatePathStats(path, outputSegmentCount);
-    els.copyPathBtn.disabled = !path;
+    renderTextOutput();
     els.downloadBtn.disabled = !path;
   }
 
@@ -675,6 +696,102 @@
     return parts.join(" ");
   }
 
+  function loopsToOpenScad(loops, coords) {
+    if (!loops || loops.length === 0) return "";
+
+    const loopData = [];
+    for (const loop of loops) {
+      const points = loop.map((idx) => ({ x: coords[idx].x, y: coords[idx].y }));
+      if (points.length < 3) continue;
+      const area = polygonSignedArea(points);
+      const absArea = Math.abs(area);
+      if (absArea < 1e-9) continue;
+      loopData.push({
+        points,
+        signedArea: area,
+        absArea,
+        probe: findProbePoint(points, area),
+        parent: -1,
+        depth: 0,
+      });
+    }
+
+    if (loopData.length === 0) return "";
+
+    for (let i = 0; i < loopData.length; i++) {
+      let bestParent = -1;
+      let bestArea = Infinity;
+      const probe = loopData[i].probe;
+      for (let j = 0; j < loopData.length; j++) {
+        if (i === j) continue;
+        if (loopData[j].absArea <= loopData[i].absArea + 1e-9) continue;
+        if (!pointInPolygonEvenOdd(probe, loopData[j].points)) continue;
+        if (loopData[j].absArea < bestArea) {
+          bestArea = loopData[j].absArea;
+          bestParent = j;
+        }
+      }
+      loopData[i].parent = bestParent;
+    }
+
+    for (let i = 0; i < loopData.length; i++) {
+      let depth = 0;
+      let p = loopData[i].parent;
+      while (p >= 0) {
+        depth++;
+        p = loopData[p].parent;
+      }
+      loopData[i].depth = depth;
+    }
+
+    const primaryIndices = [];
+    for (let i = 0; i < loopData.length; i++) {
+      if (loopData[i].depth % 2 === 0) primaryIndices.push(i);
+    }
+    if (primaryIndices.length === 0) return "";
+
+    const statements = [];
+
+    for (const outerIdx of primaryIndices) {
+      const holeIndices = [];
+      for (let i = 0; i < loopData.length; i++) {
+        if (loopData[i].parent === outerIdx && loopData[i].depth % 2 === 1) {
+          holeIndices.push(i);
+        }
+      }
+      statements.push(buildScadPolygonStatement(loopData, outerIdx, holeIndices));
+    }
+
+    if (statements.length === 1) return statements[0];
+    return ["union() {", ...statements.map((s) => `  ${s}`), "}"].join("\n");
+  }
+
+  function buildScadPolygonStatement(loopData, outerIdx, holeIndices) {
+    const points = [];
+    const paths = [];
+
+    appendLoop(loopData[outerIdx], 1);
+    for (const holeIdx of holeIndices) {
+      appendLoop(loopData[holeIdx], -1);
+    }
+
+    const pointsText = points.map((p) => `[${fmtScad(p.x)}, ${fmtScad(p.y)}]`).join(", ");
+    const pathsText = paths.map((path) => `[${path.join(", ")}]`).join(", ");
+    return `polygon(points=[${pointsText}], paths=[${pathsText}]);`;
+
+    function appendLoop(loop, desiredOrientationSign) {
+      const shouldReverse = desiredOrientationSign > 0 ? loop.signedArea < 0 : loop.signedArea > 0;
+      const ordered = shouldReverse ? loop.points.slice().reverse() : loop.points;
+      const offset = points.length;
+      const path = [];
+      for (let i = 0; i < ordered.length; i++) {
+        points.push(ordered[i]);
+        path.push(offset + i);
+      }
+      paths.push(path);
+    }
+  }
+
   function pathToSvg(pathData, width, height) {
     if (!pathData) return "";
     return [
@@ -696,11 +813,108 @@
     return (Math.round(x * 1000) / 1000).toString();
   }
 
+  function fmtScad(x) {
+    return (Math.round(x * 1e6) / 1e6).toString();
+  }
+
   function updatePathStats(path, segmentCount) {
     const bytes = path ? new TextEncoder().encode(path).length : 0;
     const kb = bytes / 1024;
     els.pathSizeValue.textContent = `${kb.toFixed(2)} KB`;
     els.segmentCountValue.textContent = String(segmentCount || 0);
+  }
+
+  function renderTextOutput() {
+    const text = state.textFormat === "scad" ? state.scadText : state.svgPathText;
+    els.pathData.value = text || "";
+    updatePathStats(text || "", state.outputSegmentCount || 0);
+    els.copyPathBtn.disabled = !text;
+  }
+
+  function polygonSignedArea(points) {
+    let sum = 0;
+    for (let i = 0; i < points.length; i++) {
+      const a = points[i];
+      const b = points[(i + 1) % points.length];
+      sum += a.x * b.y - b.x * a.y;
+    }
+    return 0.5 * sum;
+  }
+
+  function findProbePoint(points, signedArea) {
+    const centroid = polygonCentroid(points, signedArea);
+    if (centroid && pointInPolygonEvenOdd(centroid, points)) return centroid;
+
+    const boxCenter = polygonBoundsCenter(points);
+    if (pointInPolygonEvenOdd(boxCenter, points)) return boxCenter;
+
+    const orientationSign = signedArea >= 0 ? 1 : -1;
+    for (let i = 0; i < points.length; i++) {
+      const a = points[i];
+      const b = points[(i + 1) % points.length];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 1e-9) continue;
+      const mid = { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 };
+      const n = {
+        x: (-dy / len) * orientationSign * 1e-4,
+        y: (dx / len) * orientationSign * 1e-4,
+      };
+      const probe = { x: mid.x + n.x, y: mid.y + n.y };
+      if (pointInPolygonEvenOdd(probe, points)) return probe;
+    }
+    return points[0];
+  }
+
+  function polygonCentroid(points, signedArea) {
+    if (Math.abs(signedArea) < 1e-12) return null;
+    let cx = 0;
+    let cy = 0;
+    for (let i = 0; i < points.length; i++) {
+      const a = points[i];
+      const b = points[(i + 1) % points.length];
+      const cross = a.x * b.y - b.x * a.y;
+      cx += (a.x + b.x) * cross;
+      cy += (a.y + b.y) * cross;
+    }
+    const scale = 1 / (6 * signedArea);
+    return { x: cx * scale, y: cy * scale };
+  }
+
+  function polygonBoundsCenter(points) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const p of points) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
+    return { x: 0.5 * (minX + maxX), y: 0.5 * (minY + maxY) };
+  }
+
+  function pointInPolygonEvenOdd(point, polygon) {
+    const x = point.x;
+    const y = point.y;
+    let inside = false;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      const a = polygon[j];
+      const b = polygon[i];
+      if (pointOnSegment(point, a, b, 1e-9)) return true;
+      const intersects = (a.y > y) !== (b.y > y) && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x;
+      if (intersects) inside = !inside;
+    }
+    return inside;
+  }
+
+  function pointOnSegment(p, a, b, eps) {
+    const cross = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+    if (Math.abs(cross) > eps) return false;
+    const dot = (p.x - a.x) * (p.x - b.x) + (p.y - a.y) * (p.y - b.y);
+    return dot <= eps;
   }
 
   function initTargetSegmentsControl() {
