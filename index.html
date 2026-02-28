@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>img2path</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header>
+        <h1>Image to Single SVG Path</h1>
+        <p>Upload a two-color image and convert it into one SVG path.</p>
+      </header>
+
+      <section class="controls">
+        <label>
+          <span>Smoothing Iterations</span>
+          <input id="smoothIterations" type="range" min="0" max="80" value="20" />
+          <output id="smoothIterationsValue">20</output>
+        </label>
+
+        <label>
+          <span>Decimation Angle (deg)</span>
+          <input id="decimateAngle" type="range" min="0" max="30" step="0.5" value="1" />
+          <output id="decimateAngleValue">1</output>
+        </label>
+
+        <button id="downloadBtn" disabled>Download SVG</button>
+      </section>
+
+      <section class="panels">
+        <article>
+          <h2>Original</h2>
+          <div id="sourceDropzone" class="media-stage source-dropzone empty" role="button" tabindex="0">
+            <canvas id="sourceCanvas"></canvas>
+            <div id="sourceEmptyMessage" class="source-empty">drag file here or click to upload</div>
+          </div>
+          <input id="fileInput" class="hidden-file" type="file" accept="image/*" />
+        </article>
+
+        <article>
+          <h2>Output</h2>
+          <div class="tabbar" role="tablist" aria-label="Output view">
+            <button id="outputTabSvg" class="tab-btn active" type="button" role="tab" aria-selected="true">
+              SVG
+            </button>
+            <button id="outputTabBinary" class="tab-btn" type="button" role="tab" aria-selected="false">
+              Binarized
+            </button>
+          </div>
+          <div class="output-stage">
+            <div id="svgPanel">
+              <div id="svgContainer" class="svg-container"></div>
+            </div>
+            <div id="binaryPanel" class="panel-hidden">
+              <canvas id="binaryCanvas"></canvas>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section>
+        <h2>Path Data</h2>
+        <textarea id="pathData" readonly spellcheck="false"></textarea>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
