@@ -141,9 +141,9 @@ canvas {
 }
 
 .svg-container {
-  padding: 8px;
+  padding: 0;
   max-height: 420px;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .output-stage {
@@ -233,11 +233,27 @@ canvas {
   margin: 0 auto;
 }
 
+.path-tools {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.path-stats {
+  display: flex;
+  gap: 16px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 textarea {
   margin-top: 8px;
   width: 100%;
   min-height: 170px;
-  resize: vertical;
+  resize: none;
   border-radius: 12px;
   border: 1px solid var(--line);
   padding: 10px;

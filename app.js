@@ -15,6 +15,9 @@
     outputTabBinary: document.getElementById("outputTabBinary"),
     svgContainer: document.getElementById("svgContainer"),
     pathData: document.getElementById("pathData"),
+    pathSizeValue: document.getElementById("pathSizeValue"),
+    segmentCountValue: document.getElementById("segmentCountValue"),
+    copyPathBtn: document.getElementById("copyPathBtn"),
     downloadBtn: document.getElementById("downloadBtn"),
   };
 
@@ -58,10 +61,42 @@
     URL.revokeObjectURL(url);
   });
 
+  els.copyPathBtn.addEventListener("click", async () => {
+    if (!els.pathData.value) return;
+    const text = els.pathData.value;
+    let copied = false;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        copied = true;
+      }
+    } catch (_) {
+      copied = false;
+    }
+
+    if (!copied) {
+      els.pathData.focus();
+      els.pathData.select();
+      try {
+        copied = document.execCommand("copy");
+      } catch (_) {
+        copied = false;
+      }
+    }
+
+    if (!copied) return;
+    const old = els.copyPathBtn.textContent;
+    els.copyPathBtn.textContent = "Copied";
+    setTimeout(() => {
+      els.copyPathBtn.textContent = old;
+    }, 900);
+  });
+
   els.outputTabSvg.addEventListener("click", () => setOutputTab("svg"));
   els.outputTabBinary.addEventListener("click", () => setOutputTab("binary"));
   setOutputTab("svg");
   setSourceLoaded(false);
+  updatePathStats("", 0);
 
   function initSourceDropzone() {
     const dropzone = els.sourceDropzone;
@@ -186,12 +221,15 @@
     mesh = smoothMesh(mesh, Number(els.smoothIterations.value) || 0);
     mesh = decimateMesh(mesh, Number(els.decimateAngle.value) || 0);
     const loops = meshToLoops(mesh);
+    const outputSegmentCount = loops.reduce((total, loop) => total + loop.length, 0);
     const path = loopsToPathData(loops, mesh.coords, height);
     const svg = pathToSvg(path, width, height);
 
     state.svgText = svg;
     els.svgContainer.innerHTML = svg;
     els.pathData.value = path;
+    updatePathStats(path, outputSegmentCount);
+    els.copyPathBtn.disabled = !path;
     els.downloadBtn.disabled = !path;
   }
 
@@ -615,5 +653,12 @@
 
   function fmt(x) {
     return (Math.round(x * 1000) / 1000).toString();
+  }
+
+  function updatePathStats(path, segmentCount) {
+    const bytes = path ? new TextEncoder().encode(path).length : 0;
+    const kb = bytes / 1024;
+    els.pathSizeValue.textContent = `${kb.toFixed(2)} KB`;
+    els.segmentCountValue.textContent = String(segmentCount || 0);
   }
 })();
